@@ -148,6 +148,7 @@ var BG_SCENE = 'hook';     // background: 'hook' = Pioneer hook block, 'crane' =
 
 
 var APPS = [];          // apps allowed for this user
+  var ME = {};            // logged-in user: name + role
 var FRAMES = {};        // one iframe per opened app, kept so the app keeps its state
 var BG_ON = true;       // 3D background runs only on the login / home pages
 
@@ -234,6 +235,7 @@ function login(){
 // ================================================================
 function startSession(r){
   APPS = r.apps || [];
+    ME = { name: r.name || '', role: r.role || '' };
   document.getElementById('who').textContent = r.name + (r.role ? '  ·  ' + r.role : '');
 
   if(!APPS.length){
@@ -257,7 +259,11 @@ function startSession(r){
   var pick = find(want) || (APPS.length === 1 ? APPS[0] : null) || find(last);
   if(pick) openApp(pick.key); else show('home');
 }
-
+// adds the user's role and name to the app link (?pr=HOD&pu=Name) so the app can show the right menu
+function appUrl(a){
+  var sep = a.url.indexOf('?') < 0 ? '?' : '&';
+  return a.url + sep + 'pr=' + encodeURIComponent(ME.role || '') + '&pu=' + encodeURIComponent(ME.name || '');
+}
 function find(key){ for(var i=0;i<APPS.length;i++){ if(APPS[i].key===key) return APPS[i]; } return null; }
 // ===== END: startSession =====
 
@@ -274,12 +280,12 @@ function openApp(key){
   Object.keys(FRAMES).forEach(function(k){ FRAMES[k].classList.remove('on'); });
   Array.prototype.forEach.call(document.querySelectorAll('.tab'), function(t){ t.classList.remove('active'); });
   var t = document.getElementById('tab_'+key); if(t) t.classList.add('active');
-  var nt = document.getElementById('newTab'); if(nt) nt.href = a.url;
+  var nt = document.getElementById('newTab'); if(nt) nt.href = appUrl(a);
 
   if(!FRAMES[key]){
     var ld = document.getElementById('loading'); ld.classList.add('on');
     var f = document.createElement('iframe');
-    f.src = a.url;
+    f.src = appUrl(a);
     f.title = a.title;
     f.allow = 'clipboard-read; clipboard-write; camera; microphone';
     f.onload = function(){ ld.classList.remove('on'); };
