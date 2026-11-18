@@ -143,6 +143,7 @@
 //                App links themselves are kept in its APPS sheet tab.
 // ================================================================
 var API_URL = 'https://script.google.com/macros/s/AKfycbx3LaSlMlZ86bMyTTOlK4qsS6Wu5qg_fAJH97TTR4ekIhhtSF3VhJ33z4CSPq1iAVcb/exec';
+  var REMEMBER_LOGIN = false;  // true = stay logged in on this device; false = ask for the PIN again after the browser tab is closed
 var BG_SCENE = 'hook';     // background: 'hook' = Pioneer hook block, 'crane' = full crane bay
 // ===== END: SETTINGS =====
 
@@ -159,9 +160,9 @@ var BG_ON = true;       // 3D background runs only on the login / home pages
 //                login on this device). Works even where storage is blocked.
 // ================================================================
 var store = {
-  get: function(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
-  set: function(k,v){ try { localStorage.setItem(k,v); } catch(e){} },
-  del: function(k){ try { localStorage.removeItem(k); } catch(e){} }
+  get: function(k){ try { return (REMEMBER_LOGIN ? localStorage : sessionStorage).getItem(k); } catch(e){ return null; } },
+  set: function(k,v){ try { (REMEMBER_LOGIN ? localStorage : sessionStorage).setItem(k,v); } catch(e){} },
+  del: function(k){ try { (REMEMBER_LOGIN ? localStorage : sessionStorage).removeItem(k); } catch(e){} }
 };
 // ===== END: store =====
 
