@@ -310,7 +310,7 @@ function showHome(){
 }
 
 function logout(){
-  var tok = store.get('pp_token');
+  var tok = null;   // always ask for the PIN when the page is opened or refreshed
   if(tok) api('logout', { token: tok }).catch(function(){});
   store.del('pp_token'); store.del('pp_last');
   Object.keys(FRAMES).forEach(function(k){ FRAMES[k].remove(); });
