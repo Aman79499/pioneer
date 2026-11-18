@@ -84,6 +84,12 @@
   .tile span{font-size:12px;color:var(--muted);display:block;margin-top:2px;transform:translateZ(10px);}
 
   @media (max-width: 600px){ .bar .logo{display:none;} }
+  /* wide screens: login box on the left, crane working on the right */
+  @media (min-width: 1000px){
+    #pgLogin > *{max-width:380px;margin-left:9vw;margin-right:auto;}
+    #pgLogin .login-logo{text-align:center;}
+    .home{margin-left:7vw;max-width:520px;}
+  }
   @media (prefers-reduced-motion: reduce){ .card,.tile{transition:none;} }
 </style>
 </head>
@@ -136,7 +142,8 @@
 //                standalone "Pioneer Portal" Apps Script project.
 //                App links themselves are kept in its APPS sheet tab.
 // ================================================================
-var API_URL = 'https://script.google.com/macros/s/AKfycbx3LaSlMlZ86bMyTTOlK4qsS6Wu5qg_fAJH97TTR4ekIhhtSF3VhJ33z4CSPq1iAVcb/exec';
+var API_URL = 'PASTE_PORTAL_API_EXEC_LINK_HERE';
+var BG_SCENE = 'hook';     // background: 'hook' = Pioneer hook block, 'crane' = full crane bay
 // ===== END: SETTINGS =====
 
 
@@ -331,13 +338,12 @@ function bindTilt(){
 
 
 // ================================================================
-// START: crane3d
-// What it does : Draws the moving 3D overhead crane in the background
-//                (rails, columns, bridge girder, trolley, rope and hook)
-//                over a factory floor grid. Plain canvas, no extra
-//                library. Pauses while an app is open or the tab is hidden.
+// START: startWireCrane
+// What it does : Backup background (simple line drawing of the crane).
+//                Used only if the real 3D library cannot load, e.g. on a
+//                very old phone or when the internet blocks it.
 // ================================================================
-(function(){
+function startWireCrane(){
   var cv = document.getElementById('bg'), cx = cv.getContext('2d');
   var W = 0, H = 0, DPR = 1;
   var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -420,8 +426,459 @@ function bindTilt(){
     box(xt-0.9, xt+0.9, hy-1.7, hy-0.6, zb-0.7, zb+0.7, cam, '120,190,255', 1.2);
   }
   requestAnimationFrame(frame);
+}
+// ===== END: startWireCrane =====
+
+
+// ================================================================
+// START: startRealCrane
+// What it does : Live 3D EOT crane in the background, built with the
+//                Three.js library: runway columns and beams, yellow double
+//                girder bridge, trolley with hoist drum, wire ropes, hook
+//                block with hook, and a steel coil on slings. Runs a work
+//                cycle (lift → travel → lower → pause → back) and the load
+//                swings a little when the crane speeds up or brakes.
+//                Pauses while an app is open or the browser tab is hidden.
+// ================================================================
+var THREE_URL = 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js';
+
+function startRealCrane(T){
+  var cv = document.getElementById('bg');
+  var small = Math.min(window.innerWidth, window.innerHeight) < 600;
+  var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var renderer = new T.WebGLRenderer({ canvas: cv, antialias: true, alpha: true, powerPreference: 'low-power' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, small ? 1.5 : 2));
+  renderer.outputColorSpace = T.SRGBColorSpace;
+  renderer.shadowMap.enabled = !small;
+  renderer.shadowMap.type = T.PCFSoftShadowMap;
+
+  var scene = new T.Scene();
+  scene.fog = new T.Fog(0x0b1d33, 34, 80);
+  var cam = new T.PerspectiveCamera(40, 1, 0.1, 200);
+
+  // ---- lights ----
+  scene.add(new T.HemisphereLight(0xcfe3ff, 0x0b1d33, 1.1));
+  var sun = new T.DirectionalLight(0xffffff, 2.2);
+  sun.position.set(14, 26, 12);
+  sun.castShadow = !small;
+  sun.shadow.mapSize.set(1024, 1024);
+  var sc = sun.shadow.camera; sc.left = -26; sc.right = 26; sc.top = 26; sc.bottom = -26; sc.near = 1; sc.far = 80;
+  scene.add(sun);
+  var glow = new T.PointLight(0x38a9ff, 60, 45, 2); glow.position.set(0, 12, 0); scene.add(glow);
+
+  // ---- materials ----
+  var M = {
+    steel:  new T.MeshStandardMaterial({ color: 0x55677b, metalness: 0.6, roughness: 0.45 }),
+    yellow: new T.MeshStandardMaterial({ color: 0xf2b705, metalness: 0.3, roughness: 0.45 }),
+    dark:   new T.MeshStandardMaterial({ color: 0x1c2733, metalness: 0.5, roughness: 0.55 }),
+    rope:   new T.MeshStandardMaterial({ color: 0xd9e2ec, metalness: 0.85, roughness: 0.3 }),
+    red:    new T.MeshStandardMaterial({ color: 0xc62828, metalness: 0.3, roughness: 0.5 }),
+    coil:   new T.MeshStandardMaterial({ color: 0x9fb0c2, metalness: 0.9, roughness: 0.28 }),
+    floor:  new T.MeshStandardMaterial({ color: 0x0f2440, metalness: 0.1, roughness: 0.95 }),
+    blue:   new T.MeshStandardMaterial({ color: 0x0070b8, metalness: 0.4, roughness: 0.45 })
+  };
+
+  function box(w, h, d, m, x, y, z, parent){
+    var o = new T.Mesh(new T.BoxGeometry(w, h, d), m);
+    o.position.set(x, y, z); o.castShadow = true; o.receiveShadow = true;
+    (parent || scene).add(o); return o;
+  }
+  function cyl(r, len, m, parent){
+    var o = new T.Mesh(new T.CylinderGeometry(r, r, len, 20), m);
+    o.castShadow = true; (parent || scene).add(o); return o;
+  }
+
+  // ---- factory bay ----
+  var RX = 9, RY = 8, LEN = 16;
+  var fl = new T.Mesh(new T.PlaneGeometry(70, 70), M.floor);
+  fl.rotation.x = -Math.PI / 2; fl.receiveShadow = true; scene.add(fl);
+  var grid = new T.GridHelper(70, 35, 0x2f6aa3, 0x1d4570);
+  grid.position.y = 0.02; grid.material.transparent = true; grid.material.opacity = 0.55; scene.add(grid);
+
+  for (var z = -LEN; z <= LEN; z += 8) {
+    [-RX, RX].forEach(function(x){
+      box(0.7, RY, 0.7, M.steel, x, RY / 2, z);
+      box(0.9, 0.25, 0.9, M.dark, x, 0.12, z);                       // base plate
+    });
+  }
+  [-RX, RX].forEach(function(x){
+    box(0.6, 0.7, LEN * 2 + 1.4, M.steel, x, RY + 0.35, 0);           // runway beam
+    box(0.18, 0.15, LEN * 2 + 1.4, M.dark, x, RY + 0.78, 0);          // rail
+  });
+
+  // ---- bridge (moves along the bay) ----
+  var bridge = new T.Group(); scene.add(bridge);
+  var GT = RY + 0.85 + 1.2;                                            // top of the girders
+  [-0.85, 0.85].forEach(function(gz){
+    box(RX * 2 + 1.6, 1.2, 0.45, M.yellow, 0, RY + 0.85 + 0.6, gz, bridge);
+  });
+  [-RX, RX].forEach(function(x){
+    box(1.1, 0.75, 3.8, M.yellow, x, RY + 1.2, 0, bridge);           // end carriage
+    [-1.4, 1.4].forEach(function(wz){
+      var w = cyl(0.32, 0.3, M.dark, bridge);                           // wheels
+      w.rotation.z = Math.PI / 2; w.position.set(x, RY + 0.98, wz);
+    });
+  });
+  box(1.2, 0.9, 0.8, M.blue, -RX + 1.6, RY + 0.5, -1.4, bridge);       // panel box under girder
+
+  // ---- trolley (moves across the bridge) ----
+  var trolley = new T.Group(); bridge.add(trolley);
+  box(2.4, 0.35, 2.4, M.dark, 0, GT + 0.18, 0, trolley);               // frame
+  var drum = cyl(0.5, 1.5, M.steel, trolley);
+  drum.rotation.z = Math.PI / 2; drum.position.set(0, GT + 0.9, 0);    // hoist drum
+  box(0.7, 0.7, 0.7, M.yellow, 1.1, GT + 0.75, 0, trolley);            // motor
+  box(0.5, 0.6, 0.9, M.yellow, -1.05, GT + 0.7, 0.2, trolley);         // gearbox
+  [-0.9, 0.9].forEach(function(tz){                                     // trolley wheels
+    [-1, 1].forEach(function(tx){
+      var w = cyl(0.18, 0.18, M.dark, trolley);
+      w.rotation.x = Math.PI / 2; w.position.set(tx, GT + 0.02, tz);
+    });
+  });
+
+  // ---- ropes (scaled to hook height every frame) ----
+  var ropes = [-0.22, 0.22].map(function(rx){
+    var g = new T.CylinderGeometry(0.045, 0.045, 1, 8); g.translate(0, -0.5, 0);   // top at 0, grows downward
+    var r = new T.Mesh(g, M.rope); r.position.set(rx, GT + 0.4, 0); trolley.add(r); return r;
+  });
+
+  // ---- hook block + hook + load (one swinging group) ----
+  var hang = new T.Group(); trolley.add(hang);                         // pivot point = rope end
+  box(0.9, 0.9, 0.55, M.yellow, 0, -0.45, 0, hang);                    // hook block
+  [-0.2, 0.2].forEach(function(sx){
+    var sh = cyl(0.3, 0.12, M.dark, hang); sh.rotation.z = Math.PI / 2; sh.position.set(sx, -0.25, 0.3);   // sheaves
+  });
+  var shank = cyl(0.09, 0.45, M.steel, hang); shank.position.set(0, -1.12, 0);
+  var hook = new T.Mesh(new T.TorusGeometry(0.34, 0.1, 14, 36, Math.PI * 1.45), M.red);
+  hook.rotation.z = Math.PI * 0.78; hook.position.set(0, -1.62, 0); hook.castShadow = true; hang.add(hook);
+
+  var COIL_TOP = -2.9, COIL_R = 0.95;
+  [[-0.8, -0.55], [0.8, -0.55], [-0.8, 0.55], [0.8, 0.55]].forEach(function(c){        // slings
+    var from = new T.Vector3(0, -1.85, 0), to = new T.Vector3(c[0], COIL_TOP - 0.15, c[1]);
+    var len = from.distanceTo(to);
+    var s = new T.Mesh(new T.CylinderGeometry(0.03, 0.03, len, 6), M.rope);
+    s.position.copy(from).add(to).multiplyScalar(0.5);
+    s.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), to.clone().sub(from).normalize());
+    hang.add(s);
+  });
+  var coil = new T.Mesh(new T.CylinderGeometry(COIL_R, COIL_R, 1.4, 36), M.coil);
+  coil.rotation.x = Math.PI / 2; coil.position.set(0, COIL_TOP - COIL_R, 0); coil.castShadow = true; hang.add(coil);
+  var eye = new T.Mesh(new T.CylinderGeometry(0.38, 0.38, 1.42, 24), M.dark);
+  eye.rotation.x = Math.PI / 2; eye.position.copy(coil.position); hang.add(eye);
+
+  // rope length so the coil just sits on the floor / hangs high
+  var L_LOW  = GT + 0.4 - (-(COIL_TOP - 2 * COIL_R)) - 0.05;
+  var L_HIGH = 1.4;
+
+  // ---- work cycle ----
+  var A = { x: -5, z: -10 }, B = { x: 5.5, z: 9 };
+  var STEPS = [  // [seconds, from, to, rope from, rope to]
+    [3, A, A, L_LOW, L_HIGH], [8, A, B, L_HIGH, L_HIGH], [3, B, B, L_HIGH, L_LOW], [2, B, B, L_LOW, L_LOW],
+    [3, B, B, L_LOW, L_HIGH], [8, B, A, L_HIGH, L_HIGH], [3, A, A, L_HIGH, L_LOW], [2, A, A, L_LOW, L_LOW]
+  ];
+  var CYCLE = STEPS.reduce(function(s, x){ return s + x[0]; }, 0);
+  function ease(k){ return k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; }
+  function poseAt(t){
+    t = t % CYCLE;
+    for (var i = 0; i < STEPS.length; i++) {
+      var st = STEPS[i];
+      if (t <= st[0]) { var k = ease(t / st[0]);
+        return { x: st[1].x + (st[2].x - st[1].x) * k, z: st[1].z + (st[2].z - st[1].z) * k, L: st[3] + (st[4] - st[3]) * k }; }
+      t -= st[0];
+    }
+    return { x: A.x, z: A.z, L: L_LOW };
+  }
+
+  // swing: simple pendulum pushed by crane acceleration
+  var sw = { ax: 0, vx: 0, az: 0, vz: 0, px: null, pz: null, vpx: 0, vpz: 0 };
+
+  function resize(){
+    var w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    cam.aspect = w / h;
+    if (w >= 1000) cam.setViewOffset(w, h, -w * 0.2, 0, w, h);          // move the crane to the right side
+    else if (w < 600) cam.setViewOffset(w, h, 0, -h * 0.3, w, h);      // phones: crane below the login box
+    else cam.clearViewOffset();
+    cam.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize); resize();
+
+  var last = performance.now(), t0 = last;
+  function frame(now){
+    requestAnimationFrame(frame);
+    if (!BG_ON || document.hidden) { last = now; return; }
+    var dt = Math.min((now - last) / 1000, 0.05); last = now;
+    var t = still ? 4 : (now - t0) / 1000;
+
+    var p = poseAt(t);
+    bridge.position.z = p.z;
+    trolley.position.x = p.x;
+    hang.position.y = GT + 0.4 - p.L;
+    ropes.forEach(function(r){ r.scale.y = p.L; });
+
+    // pendulum swing from acceleration
+    if (sw.px !== null && dt > 0) {
+      var vx = (p.x - sw.px) / dt, vz = (p.z - sw.pz) / dt;
+      var accX = (vx - sw.vpx) / dt, accZ = (vz - sw.vpz) / dt;
+      var len = Math.max(p.L + 3, 1), g = 9.8;
+      sw.vx += (-(g / len) * sw.ax - accX / len - 0.9 * sw.vx) * dt; sw.ax += sw.vx * dt;
+      sw.vz += (-(g / len) * sw.az - accZ / len - 0.9 * sw.vz) * dt; sw.az += sw.vz * dt;
+      sw.ax = Math.max(-0.25, Math.min(0.25, sw.ax)); sw.az = Math.max(-0.25, Math.min(0.25, sw.az));
+      sw.vpx = vx; sw.vpz = vz;
+    }
+    sw.px = p.x; sw.pz = p.z;
+    hang.rotation.z = sw.ax;
+    hang.rotation.x = -sw.az;
+    drum.rotation.x = -p.L * 2.2;                                        // drum turns with the rope
+
+    // slow camera orbit around the bay
+    var a = 0.9 + Math.sin(t * 0.045) * 0.5, R = small ? 58 : 46;
+    cam.position.set(Math.sin(a) * R, small ? 26 : 19, Math.cos(a) * R);
+    cam.lookAt(0, small ? 6 : 5, 0);
+
+    renderer.render(scene, cam);
+  }
+  requestAnimationFrame(frame);
+}
+// ===== END: startRealCrane =====
+
+
+// ================================================================
+// START: startHookScene
+// What it does : Large live 3D model of the Pioneer hook block: two
+//                yellow sheave housings with "PIONEER" on the faces and
+//                black centre caps, centre flange with bolts, yoke, black
+//                forged hook and four wire ropes. It hoists up and down
+//                (ropes run with it), swings a little and slowly turns.
+//                Pauses while an app is open or the browser tab is hidden.
+// ================================================================
+function startHookScene(T){
+  var cv = document.getElementById('bg');
+  var small = window.innerWidth < 600;
+  var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var renderer = new T.WebGLRenderer({ canvas: cv, antialias: true, alpha: true, powerPreference: 'low-power' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, small ? 1.5 : 2));
+  renderer.outputColorSpace = T.SRGBColorSpace;
+  renderer.toneMapping = T.ACESFilmicToneMapping;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = T.PCFSoftShadowMap;
+
+  var scene = new T.Scene();
+  scene.fog = new T.Fog(0x0b1d33, 22, 60);
+  var cam = new T.PerspectiveCamera(34, 1, 0.1, 200);
+
+  // ---- lights ----
+  scene.add(new T.HemisphereLight(0xdfeaff, 0x0b1d33, 1.0));
+  var key = new T.DirectionalLight(0xfff4e0, 3.0);
+  key.position.set(9, 16, 12); key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  var kc = key.shadow.camera; kc.left = -8; kc.right = 8; kc.top = 10; kc.bottom = -8; kc.near = 1; kc.far = 50;
+  scene.add(key);
+  var rim = new T.DirectionalLight(0x5fb6ff, 2.2); rim.position.set(-10, 6, -8); scene.add(rim);
+  var fill = new T.PointLight(0x38a9ff, 25, 30, 2); fill.position.set(-4, 2, 6); scene.add(fill);
+
+  // ---- materials ----
+  var yellow = new T.MeshStandardMaterial({ color: 0xf5b800, metalness: 0.25, roughness: 0.38 });
+  var black  = new T.MeshStandardMaterial({ color: 0x15181c, metalness: 0.55, roughness: 0.35 });
+  var bolt   = new T.MeshStandardMaterial({ color: 0x8a6d00, metalness: 0.6, roughness: 0.4 });
+  var steel  = new T.MeshStandardMaterial({ color: 0x55677b, metalness: 0.6, roughness: 0.45 });
+  var floorM = new T.MeshStandardMaterial({ color: 0x0f2440, metalness: 0.1, roughness: 0.95 });
+
+  // "PIONEER" face texture (embossed look, like the cast letters)
+  function faceTexture(){
+    var c = document.createElement('canvas'); c.width = c.height = 512;
+    var g = c.getContext('2d');
+    g.fillStyle = '#f5b800'; g.fillRect(0, 0, 512, 512);
+    var grad = g.createRadialGradient(200, 180, 40, 256, 256, 260);    // soft cast-metal shading
+    grad.addColorStop(0, 'rgba(255,255,255,.18)'); grad.addColorStop(1, 'rgba(0,0,0,.12)');
+    g.fillStyle = grad; g.fillRect(0, 0, 512, 512);
+    g.font = 'bold 78px Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    var word = 'PIONEER', R = 175, start = -Math.PI * 0.86, span = Math.PI * 0.72;
+    for (var pass = 0; pass < 2; pass++) {                              // shadow + raised letters
+      for (var i = 0; i < word.length; i++) {
+        var a = start + span * (i / (word.length - 1));
+        g.save();
+        g.translate(256 + Math.cos(a) * R + (pass ? 0 : 4), 256 + Math.sin(a) * R + (pass ? 0 : 4));
+        g.rotate(a + Math.PI / 2);
+        g.fillStyle = pass ? '#ffd23d' : 'rgba(90,55,0,.8)';
+        g.fillText(word[i], 0, 0);
+        g.restore();
+      }
+    }
+    var t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace; t.anisotropy = 4;
+    return t;
+  }
+  var faceMat = new T.MeshStandardMaterial({ map: faceTexture(), metalness: 0.25, roughness: 0.4 });
+
+  // wire rope texture (twisted strands), scrolls when the rope runs
+  function ropeTexture(){
+    var c = document.createElement('canvas'); c.width = 64; c.height = 64;
+    var g = c.getContext('2d');
+    g.fillStyle = '#9aa6b2'; g.fillRect(0, 0, 64, 64);
+    g.strokeStyle = '#e7edf3'; g.lineWidth = 5;
+    for (var k = -64; k < 128; k += 16) { g.beginPath(); g.moveTo(k, 64); g.lineTo(k + 64, 0); g.stroke(); }
+    g.strokeStyle = 'rgba(40,50,60,.6)'; g.lineWidth = 2;
+    for (var k2 = -64; k2 < 128; k2 += 16) { g.beginPath(); g.moveTo(k2 + 7, 64); g.lineTo(k2 + 71, 0); g.stroke(); }
+    var t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.colorSpace = T.SRGBColorSpace;
+    return t;
+  }
+  var ropeTex = ropeTexture();
+  var ropeMat = new T.MeshStandardMaterial({ map: ropeTex, metalness: 0.7, roughness: 0.35 });
+
+  function mesh(geo, mat, parent){ var m = new T.Mesh(geo, mat); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m; }
+
+  // ---- floor and a few far columns for depth ----
+  var fl = new T.Mesh(new T.PlaneGeometry(80, 80), floorM);
+  fl.rotation.x = -Math.PI / 2; fl.receiveShadow = true; scene.add(fl);
+  var grid = new T.GridHelper(80, 40, 0x2f6aa3, 0x1d4570);
+  grid.position.y = 0.02; grid.material.transparent = true; grid.material.opacity = 0.5; scene.add(grid);
+  for (var cz = -24; cz <= 0; cz += 8) {
+    [-12, 12].forEach(function(cx){
+      var col = new T.Mesh(new T.BoxGeometry(0.8, 18, 0.8), steel); col.position.set(cx * 1.4, 9, cz - 16); scene.add(col);
+    });
+  }
+
+  // ---- hook block (pivot at the top, so ropes and block swing together) ----
+  var TOP = 26;
+  var pivot = new T.Group(); pivot.position.y = TOP; scene.add(pivot);
+  var block = new T.Group(); pivot.add(block);
+
+  var R = 1.0, W = 0.5, GAP = 0.12, SX = W / 2 + GAP / 2;               // sheave radius, width, centre gap
+  [-SX, SX].forEach(function(sx){
+    var s = mesh(new T.CylinderGeometry(R, R, W, 64), yellow, block);   // sheave housing
+    s.rotation.z = Math.PI / 2; s.position.x = sx;
+    var outer = sx > 0 ? 1 : -1, fx = sx + outer * (W / 2 + 0.003);
+    var face = mesh(new T.CircleGeometry(R * 0.985, 64), faceMat, block); // PIONEER face
+    face.position.x = fx; face.rotation.y = outer * Math.PI / 2;
+    var bead = mesh(new T.TorusGeometry(R - 0.02, 0.045, 10, 64), yellow, block);   // rounded edge
+    bead.position.x = fx - outer * 0.01; bead.rotation.y = Math.PI / 2;
+    var cap = mesh(new T.CylinderGeometry(0.17, 0.2, 0.09, 32), black, block);      // black centre cap
+    cap.rotation.z = Math.PI / 2; cap.position.x = fx + outer * 0.045;
+  });
+  var flange = mesh(new T.CylinderGeometry(R * 1.05, R * 1.05, GAP, 64), yellow, block);   // centre flange
+  flange.rotation.z = Math.PI / 2;
+  [[0.78, 0.55], [0.78, -0.55], [-0.62, 0.72], [-0.62, -0.72]].forEach(function(b){    // flange bolts
+    var h = mesh(new T.CylinderGeometry(0.06, 0.06, GAP + 0.14, 6), bolt, block);
+    h.rotation.z = Math.PI / 2; h.position.set(0, b[0], b[1]);
+  });
+
+  // yoke under the sheaves + grease box
+  var yoke = mesh(new T.BoxGeometry(0.95, 0.62, 0.85), yellow, block); yoke.position.y = -R - 0.05;
+  var lug = mesh(new T.BoxGeometry(0.28, 0.22, 0.12), yellow, block); lug.position.set(0.18, -R - 0.08, 0.48);
+  var nut = mesh(new T.CylinderGeometry(0.26, 0.26, 0.18, 6), black, block); nut.position.y = -R - 0.45;
+  var shank = mesh(new T.CylinderGeometry(0.15, 0.17, 0.5, 24), black, block); shank.position.y = -R - 0.78;
+
+  // forged hook: tapered tube along a hook-shaped path, opening to the side
+  var Y0 = -R - 1.0;
+  var path = new T.CatmullRomCurve3([
+    new T.Vector3(0, Y0, 0), new T.Vector3(0, Y0 - 0.45, 0), new T.Vector3(-0.12, Y0 - 0.95, 0),
+    new T.Vector3(0.02, Y0 - 1.42, 0), new T.Vector3(0.45, Y0 - 1.58, 0), new T.Vector3(0.86, Y0 - 1.36, 0),
+    new T.Vector3(1.0, Y0 - 0.95, 0), new T.Vector3(0.93, Y0 - 0.7, 0)
+  ]);
+  var SEG = 80, RAD = 16;
+  var hg = new T.TubeGeometry(path, SEG, 1, RAD, false);
+  var pos = hg.attributes.position, P = new T.Vector3(), V = new T.Vector3();
+  function thick(u){                                                       // thick belly, thin tip
+    if (u < 0.15) return 0.17;
+    if (u < 0.55) return 0.17 + (u - 0.15) / 0.4 * 0.11;
+    if (u < 0.8)  return 0.28 - (u - 0.55) / 0.25 * 0.1;
+    return 0.18 - (u - 0.8) / 0.2 * 0.1;
+  }
+  for (var i = 0; i <= SEG; i++) {
+    var u = i / SEG; path.getPointAt(u, P); var r = thick(u);
+    for (var j = 0; j <= RAD; j++) {
+      var idx = i * (RAD + 1) + j;
+      V.fromBufferAttribute(pos, idx).sub(P).multiplyScalar(r).add(P);
+      pos.setXYZ(idx, V.x, V.y, V.z);
+    }
+  }
+  hg.computeVertexNormals();
+  var hook = mesh(hg, black, block);
+  var tipCap = mesh(new T.SphereGeometry(0.08, 16, 12), black, block); path.getPointAt(1, tipCap.position);
+  hook.rotation.y = 0.75;  tipCap.position.applyAxisAngle(new T.Vector3(0, 1, 0), 0.75);
+
+  // four wire ropes: front and back of each sheave, up to the trolley
+  var ropes = [];
+  [-SX, SX].forEach(function(sx){
+    [-R + 0.04, R - 0.04].forEach(function(sz){
+      var g = new T.CylinderGeometry(0.055, 0.055, 1, 10, 1, true); g.translate(0, 0.5, 0);
+      var m = new T.Mesh(g, ropeMat); m.castShadow = true;
+      m.position.set(sx, 0.05, sz); block.add(m); ropes.push(m);
+    });
+  });
+
+  // ---- camera framing ----
+  var VIEW = small ? { d: 27, y: 4.2 } : { d: 16, y: 3.6 };
+  function resize(){
+    var w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    cam.aspect = w / h;
+    if (w >= 1000) cam.setViewOffset(w, h, -w * 0.2, 0, w, h);          // hook on the right, login on the left
+    else if (w < 600) cam.setViewOffset(w, h, 0, -h * 0.31, w, h);      // phones: hook below the login box
+    else cam.clearViewOffset();
+    cam.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize); resize();
+
+  var t0 = performance.now(), last = t0;
+  function frame(now){
+    requestAnimationFrame(frame);
+    if (!BG_ON || document.hidden) { last = now; return; }
+    last = now;
+    var t = still ? 3 : (now - t0) / 1000;
+
+    // hoist up/down (block height above floor) — ropes get longer/shorter and run
+    var y = 4.2 + Math.sin(t * 0.32) * 1.3;
+    block.position.y = -(TOP - y);
+    var len = TOP - y;
+    ropes.forEach(function(r){ r.scale.y = len; });
+    ropeTex.repeat.set(1, len * 3);
+    ropeTex.offset.y = -y * 3;                                              // strands move with the rope
+
+    // gentle swing + slow turn so the PIONEER face and the hook side both show
+    pivot.rotation.z = Math.sin(t * 0.62) * 0.022 + Math.sin(t * 0.32) * 0.01;
+    pivot.rotation.x = Math.sin(t * 0.47 + 1) * 0.015;
+    block.rotation.y = -0.5 + Math.sin(t * 0.16) * 0.35;
+
+    // camera: slight drift, looks at the block
+    var a = 0.45 + Math.sin(t * 0.07) * 0.12;
+    cam.position.set(Math.sin(a) * VIEW.d, VIEW.y + 2.2, Math.cos(a) * VIEW.d);
+    cam.lookAt(0, y - 0.6, 0);
+
+    renderer.render(scene, cam);
+  }
+  requestAnimationFrame(frame);
+}
+// ===== END: startHookScene =====
+
+
+// ================================================================
+// START: start background
+// What it does : Loads the 3D library and starts the real crane. If the
+//                library cannot load or the device has no 3D support,
+//                the simple line-drawing crane is used instead.
+// ================================================================
+(function(){
+  var done = false;
+  function fallback(){
+    if (done) return; done = true;
+    try {                                                              // fresh canvas, in case 3D already used the old one
+      var old = document.getElementById('bg'), n = old.cloneNode(false);
+      n.style.display = old.style.display; old.parentNode.replaceChild(n, old);
+      startWireCrane();
+    } catch(e){}
+  }
+  var timer = setTimeout(fallback, 8000);                               // slow internet: don't wait forever
+  try {
+    import(THREE_URL).then(function(T){
+      if (done) return;
+      clearTimeout(timer); done = true;
+      try { (BG_SCENE === 'crane' ? startRealCrane : startHookScene)(T); } catch(e){ console.warn('3D crane failed, using simple one:', e); done = false; fallback(); }
+    }).catch(function(e){ clearTimeout(timer); console.warn('3D library not loaded:', e); fallback(); });
+  } catch(e){ clearTimeout(timer); fallback(); }
 })();
-// ===== END: crane3d =====
+// ===== END: start background =====
 
 
 // ================================================================
